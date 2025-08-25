@@ -80,9 +80,9 @@ On first launch, you will be prompted to:
 SUPPORT
 
 
-Website: https://software.nafasmedia.eu.org
-Privacy Policy: https://software.nafasmedia.eu.org/privacy
-Terms of Service: https://software.nafasmedia.eu.org/terms
+Website: https://at.nafasmedia.eu.org
+Privacy Policy: https://at.nafasmedia.eu.org/privacy
+Terms of Service: https://at.nafasmedia.eu.org/terms
 
 For technical support or to report issues, please contact our support team through the website.
 
