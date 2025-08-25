@@ -1,0 +1,39 @@
+# Changelog - Premium Airdrop Tracker
+
+All notable changes to this project will be documented in this file.
+
+## [v1.1] - 2025-08-23
+
+### Added
+- Added "About" tab with application information and developer credits
+- Added website link button to NafasMedia website
+- Added Privacy Policy link button
+- Added Terms of Service link button
+- Added thread locking mechanism to prevent data corruption
+- Added automatic backup of corrupted data files
+- Added improved error handling for data loading issues
+
+### Changed
+- Updated application version to v1.1
+- Improved auto-lock functionality to not activate when app is minimized to tray
+- Enhanced thread safety for all data operations
+- Modified inactivity timer to respect tray state
+- Improved data corruption handling and recovery
+
+### Fixed
+- Fixed race conditions that could cause data corruption
+- Fixed threading issues during data loading
+- Fixed auto-lock activating while app is in system tray
+- Fixed potential data loss during concurrent access
+- Minor UI improvements and bug fixes
+
+## [v1.0] - 2025-08-21
+
+### Initial Release
+- Basic airdrop project management functionality
+- Dashboard with statistics and charts
+- Reminder system with notifications
+- Password protection and recovery
+- Data export/import capabilities
+- System tray integration
+- Auto-backup system
