@@ -27,6 +27,8 @@ import binascii
 import pystray
 from pystray import MenuItem as item
 import keyboard
+import webbrowser
+import traceback
 
 # Pre-load matplotlib font cache to avoid blocking
 plt.rcParams['font.family'] = 'DejaVu Sans'
@@ -58,7 +60,7 @@ class AutoLockManager:
         
     def reset_inactivity_timer(self, event=None):
         """Reset inactivity timer"""
-        if self.running:
+        if self.running and not self.app.is_minimized_to_tray:
             self.last_activity_time = time.time()
         
     def check_inactivity(self):
@@ -67,6 +69,13 @@ class AutoLockManager:
             return
             
         try:
+            # Don't lock if app is minimized to tray
+            if self.app.is_minimized_to_tray:
+                # Check again after 1 minute if still running
+                if self.running and hasattr(self, 'winfo_exists') and self.winfo_exists():
+                    self.app.after(60000, self.check_inactivity)
+                return
+                
             current_time = time.time()
             if current_time - self.last_activity_time > self.inactivity_minutes * 60:
                 if self.app.winfo_viewable():  # Only lock if window is visible
@@ -148,7 +157,7 @@ class PremiumAirdropTracker(ctk.CTk):
         super().__init__()
 
         # Configure the main window
-        self.title("Premium Airdrop Tracker v1.4 Beta")
+        self.title("Premium Airdrop Tracker v1.1")
         self.geometry("1400x800")
         self.minsize(1200, 700)
 
@@ -156,6 +165,7 @@ class PremiumAirdropTracker(ctk.CTk):
         self.running = True
         self.is_minimized_to_tray = False
         self.closing_app = False
+        self.data_lock = threading.Lock()  # Lock for thread-safe data access
 
         # Initialize chart variables
         self.status_fig = None
@@ -172,7 +182,7 @@ class PremiumAirdropTracker(ctk.CTk):
             return
 
         try:
-            # Load data
+            # Load data with thread-safe protection
             self.df = self.load_data()
             
             # Create backup directory
@@ -202,7 +212,7 @@ class PremiumAirdropTracker(ctk.CTk):
             # Reminder notification window
             self.reminder_window = None
             
-            # Setup new features for v1.4
+            # Setup new features
             self.setup_new_features()
             
             # Load snooze data
@@ -213,7 +223,7 @@ class PremiumAirdropTracker(ctk.CTk):
             self.destroy()
 
     def setup_new_features(self):
-        """Setup new features for v1.4"""
+        """Setup new features for v1.1"""
         # System tray
         self.tray_icon = None
         self.tray_thread = None
@@ -270,6 +280,10 @@ class PremiumAirdropTracker(ctk.CTk):
             # Hide tray icon when showing app
             if self.tray_icon:
                 self.tray_icon.visible = False
+                
+            # Reset inactivity timer when showing from tray
+            if hasattr(self, 'auto_lock'):
+                self.auto_lock.reset_inactivity_timer()
         except Exception as e:
             print(f"Error showing from tray: {e}")
 
@@ -431,6 +445,36 @@ class PremiumAirdropTracker(ctk.CTk):
         pwdhash = binascii.hexlify(pwdhash).decode('ascii')
         return pwdhash == stored_hash
 
+    def change_password(self):
+        """Change the application password"""
+        old_password = simpledialog.askstring("Change Password", "Enter current password:", show='*')
+        if old_password is None:
+            return
+            
+        # Verify old password
+        with open(self.password_file, 'r') as f:
+            stored_password = f.read().strip()
+            
+        if not self.verify_password(stored_password, old_password):
+            messagebox.showerror("Error", "Incorrect current password")
+            return
+            
+        # Get new password
+        new_password = simpledialog.askstring("Change Password", "Enter new password:", show='*')
+        if new_password is None or new_password == "":
+            return
+            
+        confirm = simpledialog.askstring("Change Password", "Confirm new password:", show='*')
+        if new_password != confirm:
+            messagebox.showerror("Error", "Passwords don't match")
+            return
+            
+        # Hash and store new password
+        with open(self.password_file, 'w') as f:
+            f.write(self.hash_password(new_password))
+            
+        messagebox.showinfo("Success", "Password changed successfully")
+
     def get_data_file_path(self):
         """Determine where to save the data file"""
         if getattr(sys, 'frozen', False):
@@ -538,7 +582,7 @@ class PremiumAirdropTracker(ctk.CTk):
         footer_frame.pack(side="bottom", fill="x", padx=10, pady=5)
         
         # Version info
-        version_label = ctk.CTkLabel(footer_frame, text="v1.4 Beta", 
+        version_label = ctk.CTkLabel(footer_frame, text="v1.1", 
                                    font=ctk.CTkFont(size=12))
         version_label.pack(side="left", padx=10)
         
@@ -564,7 +608,8 @@ class PremiumAirdropTracker(ctk.CTk):
             ("📊 Dashboard", self.show_dashboard),
             ("📋 Data Manager", self.show_data_manager),
             ("⏰ Reminders", self.show_reminder_settings),
-            ("⚙️ Settings", self.show_settings)
+            ("⚙️ Settings", self.show_settings),
+            ("ℹ️ About", self.show_about)
         ]
 
         for text, command in nav_buttons:
@@ -594,12 +639,52 @@ class PremiumAirdropTracker(ctk.CTk):
         self.data_tab = self.tabview.add("📋 Data")
         self.reminder_tab = self.tabview.add("⏰ Reminders")
         self.settings_tab = self.tabview.add("⚙️ Settings")
+        self.about_tab = self.tabview.add("ℹ️ About")
 
         # Setup each tab
         self.setup_dashboard_tab()
         self.setup_data_tab()
         self.setup_reminder_tab()
         self.setup_settings_tab()
+        self.setup_about_tab()
+
+    def setup_about_tab(self):
+        """Setup about tab"""
+        about_frame = ctk.CTkFrame(self.about_tab, fg_color="transparent")
+        about_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # App info
+        app_name = ctk.CTkLabel(about_frame, text="Premium Airdrop Tracker", 
+                               font=ctk.CTkFont(size=24, weight="bold"))
+        app_name.pack(pady=10)
+        
+        version = ctk.CTkLabel(about_frame, text="Apps Version 1.1", 
+                              font=ctk.CTkFont(size=16))
+        version.pack(pady=5)
+        
+        developer = ctk.CTkLabel(about_frame, text="Developed by NafasMedia Software", 
+                                font=ctk.CTkFont(size=14))
+        developer.pack(pady=5)
+        
+        copyright = ctk.CTkLabel(about_frame, 
+                                text="Copyright 2025 NafasMedia Software. All rights reserved.",
+                                font=ctk.CTkFont(size=14))
+        copyright.pack(pady=20)
+        
+        # Website button
+        website_btn = ctk.CTkButton(about_frame, text="Visit Our Website", 
+                                  command=lambda: webbrowser.open("https://at.nafasmedia.eu.org/"))
+        website_btn.pack(pady=10, padx=50, fill="x")
+        
+        # Privacy Policy button
+        privacy_btn = ctk.CTkButton(about_frame, text="Privacy Policy", 
+                                  command=lambda: webbrowser.open("https://at.nafasmedia.eu.org/p/privacy.html"))
+        privacy_btn.pack(pady=10, padx=50, fill="x")
+        
+        # Terms of Service button
+        tos_btn = ctk.CTkButton(about_frame, text="Terms of Service", 
+                              command=lambda: webbrowser.open("https://at.nafasmedia.eu.org/terms.html"))
+        tos_btn.pack(pady=10, padx=50, fill="x")
 
     def setup_dashboard_tab(self):
         """Setup dashboard tab"""
@@ -907,6 +992,9 @@ class PremiumAirdropTracker(ctk.CTk):
         ctk.CTkLabel(settings_scroll, text="Password Settings", 
                    font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(20, 5))
         
+        ctk.CTkButton(settings_scroll, text="Change Password", 
+                     command=self.change_password).pack(pady=5)
+        
         # Password recovery button
         ctk.CTkButton(settings_scroll, text="Password Recovery", 
                      command=self.initiate_password_recovery).pack(pady=5)
@@ -985,11 +1073,12 @@ class PremiumAirdropTracker(ctk.CTk):
                 'Reminder Enabled': True  # Default to enabled
             }
 
-            # Add to DataFrame
-            if self.df.empty:
-                self.df = pd.DataFrame([project_data])
-            else:
-                self.df = pd.concat([self.df, pd.DataFrame([project_data])], ignore_index=True)
+            # Add to DataFrame with thread safety
+            with self.data_lock:
+                if self.df.empty:
+                    self.df = pd.DataFrame([project_data])
+                else:
+                    self.df = pd.concat([self.df, pd.DataFrame([project_data])], ignore_index=True)
 
             # Save and update
             self.save_data()
@@ -1025,15 +1114,16 @@ class PremiumAirdropTracker(ctk.CTk):
             hour_var, minute_var = self.form_fields['Due Time']
             due_time = f"{hour_var.get()}:{minute_var.get()}"
 
-            # Update the DataFrame row
-            self.df.at[index, 'Project Name'] = project_name
-            self.df.at[index, 'Status'] = self.form_fields['Status'].get()
-            self.df.at[index, 'Due Date'] = self.form_fields['Due Date'].get_date().strftime('%Y-%m-%d')
-            self.df.at[index, 'Due Time'] = due_time
-            self.df.at[index, 'Progress'] = self.form_fields['Progress'].get()
-            self.df.at[index, 'Estimated Reward'] = float(self.form_fields['Estimated Reward (Rp)'].get() or 0)
-            self.df.at[index, 'Project Link'] = self.form_fields['Project Link'].get().strip()
-            self.df.at[index, 'Notes'] = self.form_fields['Notes'].get("1.0", "end-1c").strip()
+            # Update the DataFrame row with thread safety
+            with self.data_lock:
+                self.df.at[index, 'Project Name'] = project_name
+                self.df.at[index, 'Status'] = self.form_fields['Status'].get()
+                self.df.at[index, 'Due Date'] = self.form_fields['Due Date'].get_date().strftime('%Y-%m-%d')
+                self.df.at[index, 'Due Time'] = due_time
+                self.df.at[index, 'Progress'] = self.form_fields['Progress'].get()
+                self.df.at[index, 'Estimated Reward'] = float(self.form_fields['Estimated Reward (Rp)'].get() or 0)
+                self.df.at[index, 'Project Link'] = self.form_fields['Project Link'].get().strip()
+                self.df.at[index, 'Notes'] = self.form_fields['Notes'].get("1.0", "end-1c").strip()
 
             # Remove from shown reminders if due date/time changed
             project_id = f"{project_name}_{self.df.at[index, 'Due Date']}_{self.df.at[index, 'Due Time']}"
@@ -1152,7 +1242,9 @@ class PremiumAirdropTracker(ctk.CTk):
                 if project_id in self.snoozed_projects:
                     del self.snoozed_projects[project_id]
                 
-                self.df = self.df.drop(selected_index).reset_index(drop=True)
+                # Delete with thread safety
+                with self.data_lock:
+                    self.df = self.df.drop(selected_index).reset_index(drop=True)
                 
                 self.save_data()
                 self.update_table()
@@ -1399,50 +1491,52 @@ class PremiumAirdropTracker(ctk.CTk):
     def save_data(self):
         """Save data to Excel with color coding"""
         try:
-            # Create a new workbook
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Airdrop Data"
-            
-            # Write headers (exclude Reminder Enabled column)
-            headers = [col for col in self.df.columns if col != 'Reminder Enabled']
-            for col_idx, header in enumerate(headers, 1):
-                cell = ws.cell(row=1, column=col_idx, value=header)
-                cell.font = Font(bold=True)
-            
-            # Define color fills for different statuses
-            status_colors = {
-                'Active': PatternFill(start_color='4FC3F7', end_color='4FC3F7', fill_type='solid'),
-                'Completed': PatternFill(start_color='81C784', end_color='81C784', fill_type='solid'),
-                'Monitoring': PatternFill(start_color='FFA500', end_color='FFA500', fill_type='solid'),
-                'Dropped': PatternFill(start_color='E57373', end_color='E57373', fill_type='solid')
-            }
-            
-            # Write data with color coding (exclude Reminder Enabled column)
-            for r_idx, row in self.df.iterrows():
-                for c_idx, col in enumerate(headers, 1):
-                    value = row[col]
-                    cell = ws.cell(row=r_idx+2, column=c_idx, value=value)
-                    
-                    # Apply color based on status
-                    if col == 'Status' and value in status_colors:
-                        cell.fill = status_colors[value]
-            
-            # Auto-adjust column widths
-            for column in ws.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                for cell in column:
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                adjusted_width = min(max_length + 2, 50)
-                ws.column_dimensions[column_letter].width = adjusted_width
-            
-            # Save the workbook
-            wb.save(self.data_file_path)
+            # Use thread-safe lock for data access
+            with self.data_lock:
+                # Create a new workbook
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "Airdrop Data"
+                
+                # Write headers (exclude Reminder Enabled column)
+                headers = [col for col in self.df.columns if col != 'Reminder Enabled']
+                for col_idx, header in enumerate(headers, 1):
+                    cell = ws.cell(row=1, column=col_idx, value=header)
+                    cell.font = Font(bold=True)
+                
+                # Define color fills for different statuses
+                status_colors = {
+                    'Active': PatternFill(start_color='4FC3F7', end_color='4FC3F7', fill_type='solid'),
+                    'Completed': PatternFill(start_color='81C784', end_color='81C784', fill_type='solid'),
+                    'Monitoring': PatternFill(start_color='FFA500', end_color='FFA500', fill_type='solid'),
+                    'Dropped': PatternFill(start_color='E57373', end_color='E57373', fill_type='solid')
+                }
+                
+                # Write data with color coding (exclude Reminder Enabled column)
+                for r_idx, row in self.df.iterrows():
+                    for c_idx, col in enumerate(headers, 1):
+                        value = row[col]
+                        cell = ws.cell(row=r_idx+2, column=c_idx, value=value)
+                        
+                        # Apply color based on status
+                        if col == 'Status' and value in status_colors:
+                            cell.fill = status_colors[value]
+                
+                # Auto-adjust column widths
+                for column in ws.columns:
+                    max_length = 0
+                    column_letter = column[0].column_letter
+                    for cell in column:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                    adjusted_width = min(max_length + 2, 50)
+                    ws.column_dimensions[column_letter].width = adjusted_width
+                
+                # Save the workbook
+                wb.save(self.data_file_path)
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save data: {str(e)}")
@@ -1472,36 +1566,44 @@ class PremiumAirdropTracker(ctk.CTk):
             print(f"Error loading snooze data: {e}")
 
     def load_data(self):
-        """Load data from Excel - Fixed numpy.bool conversion issue"""
+        """Load data from Excel with thread safety and error handling"""
         try:
-            if os.path.exists(self.data_file_path):
-                df = pd.read_excel(self.data_file_path)
-                # Ensure all required columns exist
-                required_columns = ['Project Name', 'Status', 'Due Date', 'Due Time', 
-                                  'Progress', 'Estimated Reward', 'Project Link', 'Notes', 'Reminder Enabled']
-                
-                for col in required_columns:
-                    if col not in df.columns:
-                        if col == 'Reminder Enabled':
-                            df[col] = True
-                        else:
-                            df[col] = '' if col != 'Estimated Reward' else 0.0
-                
-                # Handle NaN values
-                df = df.fillna('')
-                
-                # Convert numpy.bool_ to Python bool for Reminder Enabled column
-                if 'Reminder Enabled' in df.columns:
-                    df['Reminder Enabled'] = df['Reminder Enabled'].apply(lambda x: bool(x) if pd.notna(x) else True)
-                
-                return df
-            else:
-                return pd.DataFrame(columns=[
-                    'Project Name', 'Status', 'Due Date', 'Due Time',
-                    'Progress', 'Estimated Reward', 'Project Link', 'Notes', 'Reminder Enabled'
-                ])
+            with self.data_lock:
+                if os.path.exists(self.data_file_path):
+                    df = pd.read_excel(self.data_file_path)
+                    # Ensure all required columns exist
+                    required_columns = ['Project Name', 'Status', 'Due Date', 'Due Time', 
+                                      'Progress', 'Estimated Reward', 'Project Link', 'Notes', 'Reminder Enabled']
+                    
+                    for col in required_columns:
+                        if col not in df.columns:
+                            if col == 'Reminder Enabled':
+                                df[col] = True
+                            else:
+                                df[col] = '' if col != 'Estimated Reward' else 0.0
+                    
+                    # Handle NaN values
+                    df = df.fillna('')
+                    
+                    # Convert numpy.bool_ to Python bool for Reminder Enabled column
+                    if 'Reminder Enabled' in df.columns:
+                        df['Reminder Enabled'] = df['Reminder Enabled'].apply(lambda x: bool(x) if pd.notna(x) else True)
+                    
+                    return df
+                else:
+                    return pd.DataFrame(columns=[
+                        'Project Name', 'Status', 'Due Date', 'Due Time',
+                        'Progress', 'Estimated Reward', 'Project Link', 'Notes', 'Reminder Enabled'
+                    ])
         except Exception as e:
             print(f"Load error: {e}")
+            # Create backup of corrupted file
+            if os.path.exists(self.data_file_path):
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                corrupted_backup = os.path.join(self.backup_dir, f"corrupted_backup_{timestamp}.xlsx")
+                shutil.copy2(self.data_file_path, corrupted_backup)
+                print(f"Created backup of corrupted file: {corrupted_backup}")
+            
             messagebox.showwarning("Warning", "Data file is corrupted. Creating new dataset.")
             return pd.DataFrame(columns=[
                 'Project Name', 'Status', 'Due Date', 'Due Time',
@@ -1575,7 +1677,7 @@ class PremiumAirdropTracker(ctk.CTk):
                         if col == 'Status' and value in status_colors:
                             cell.fill = status_colors[value]
                 
-                # Auto-adjust column widths
+                # Auto-adject column widths
                 for column in ws.columns:
                     max_length = 0
                     column_letter = column[0].column_letter
@@ -1741,7 +1843,8 @@ class PremiumAirdropTracker(ctk.CTk):
                     new_df['Reminder Enabled'] = new_df['Reminder Enabled'].apply(lambda x: bool(x) if pd.notna(x) else True)
                 
                 # Replace the current data with imported data
-                self.df = new_df
+                with self.data_lock:
+                    self.df = new_df
                 self.save_data()
                 self.update_table()
                 self.update_dashboard()
@@ -1771,7 +1874,8 @@ class PremiumAirdropTracker(ctk.CTk):
                             new_df[col] = '' if col != 'Estimated Reward' else 0.0
                 
                 # Replace the current data with imported data
-                self.df = new_df
+                with self.data_lock:
+                    self.df = new_df
                 self.save_data()
                 self.update_table()
                 self.update_dashboard()
@@ -1840,10 +1944,11 @@ class PremiumAirdropTracker(ctk.CTk):
         """Delete all data with confirmation"""
         if messagebox.askyesno("Confirm Deletion", "Are you sure you want to delete ALL data? This action cannot be undone!"):
             try:
-                self.df = pd.DataFrame(columns=[
-                    'Project Name', 'Status', 'Due Date', 'Due Time',
-                    'Progress', 'Estimated Reward', 'Project Link', 'Notes', 'Reminder Enabled'
-                ])
+                with self.data_lock:
+                    self.df = pd.DataFrame(columns=[
+                        'Project Name', 'Status', 'Due Date', 'Due Time',
+                        'Progress', 'Estimated Reward', 'Project Link', 'Notes', 'Reminder Enabled'
+                    ])
                 self.shown_reminders.clear()
                 self.snoozed_projects.clear()
                 self.save_data()
@@ -1871,6 +1976,10 @@ class PremiumAirdropTracker(ctk.CTk):
     def show_settings(self):
         """Show settings tab"""
         self.tabview.set("⚙️ Settings")
+
+    def show_about(self):
+        """Show about tab"""
+        self.tabview.set("ℹ️ About")
 
     def on_closing(self):
         """Handle application closing - minimize to tray instead of closing"""
